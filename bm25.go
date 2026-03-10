@@ -2,6 +2,7 @@ package tdt
 
 import (
 	"math"
+	"sort"
 	"strings"
 	"unicode"
 
@@ -39,14 +40,22 @@ func tokenize(text string) []string {
 	return tokens
 }
 
-// splitCamelCase inserts spaces before uppercase letters that follow lowercase
-// letters, e.g. "getWeather" -> "get Weather".
+// splitCamelCase inserts spaces at camelCase boundaries.
+// Handles: "getWeather" -> "get Weather", "HTTPServer" -> "HTTP Server".
 func splitCamelCase(s string) string {
 	var b strings.Builder
 	runes := []rune(s)
 	for i, r := range runes {
-		if i > 0 && unicode.IsUpper(r) && unicode.IsLower(runes[i-1]) {
-			b.WriteRune(' ')
+		if i > 0 && unicode.IsUpper(r) {
+			prev := runes[i-1]
+			// Case 1: uppercase after lowercase (e.g., "getWeather" at 'W')
+			if unicode.IsLower(prev) {
+				b.WriteRune(' ')
+			} else if unicode.IsUpper(prev) && i+1 < len(runes) && unicode.IsLower(runes[i+1]) {
+				// Case 2: uppercase followed by lowercase, after uppercase sequence
+				// (e.g., "HTTPServer" at 'S' - prev is 'P', next is 'e')
+				b.WriteRune(' ')
+			}
 		}
 		b.WriteRune(r)
 	}
@@ -78,6 +87,7 @@ type toolScore struct {
 }
 
 // buildCompositeText creates a searchable text blob from a server and tool.
+// Tags are sorted by key for deterministic output.
 func buildCompositeText(s ServerMetadata, t ToolInfo) string {
 	var b strings.Builder
 	b.WriteString(t.Name)
@@ -85,11 +95,18 @@ func buildCompositeText(s ServerMetadata, t ToolInfo) string {
 	b.WriteString(t.Description)
 	b.WriteString(" ")
 	b.WriteString(s.Category)
-	for k, v := range s.Tags {
+
+	// Sort tag keys for deterministic iteration order.
+	keys := make([]string, 0, len(s.Tags))
+	for k := range s.Tags {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
 		b.WriteString(" ")
 		b.WriteString(k)
 		b.WriteString(" ")
-		b.WriteString(v)
+		b.WriteString(s.Tags[k])
 	}
 	return b.String()
 }

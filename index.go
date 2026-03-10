@@ -30,31 +30,40 @@ func NewIndexWithEmbedder(embeddingFunc chromem.EmbeddingFunc) *Index {
 }
 
 // Update replaces the entire index with new metadata.
+// Embedding computation happens outside the lock to avoid blocking readers.
 func (idx *Index) Update(servers []ServerMetadata) {
-	idx.mu.Lock()
-	defer idx.mu.Unlock()
-	idx.servers = make([]ServerMetadata, len(servers))
-	copy(idx.servers, servers)
-	idx.corpus = newBM25Corpus(idx.servers)
+	// Copy servers outside the lock.
+	serversCopy := make([]ServerMetadata, len(servers))
+	copy(serversCopy, servers)
 
-	// Compute embeddings if embedder is configured.
+	// Build corpus outside the lock.
+	corpus := newBM25Corpus(serversCopy)
+
+	// Compute embeddings outside the lock (potentially slow network calls).
+	var embeddings [][]float32
 	if idx.embeddingFunc != nil {
-		embeddings := make([][]float32, len(idx.corpus.docs))
-		for i, doc := range idx.corpus.docs {
+		embeddings = make([][]float32, len(corpus.docs))
+		for i, doc := range corpus.docs {
 			text := buildCompositeText(
-				findServer(idx.servers, doc.serverName),
-				findTool(idx.servers, doc.serverName, doc.toolName),
+				findServer(serversCopy, doc.serverName),
+				findTool(serversCopy, doc.serverName, doc.toolName),
 			)
 			emb, err := idx.embeddingFunc(context.Background(), text)
 			if err != nil {
 				log.Printf("tdt: failed to embed tool %s: %v, semantic search disabled", doc.toolName, err)
-				idx.embeddings = nil
-				return
+				embeddings = nil
+				break
 			}
 			embeddings[i] = emb
 		}
-		idx.embeddings = embeddings
 	}
+
+	// Take lock only for final assignment.
+	idx.mu.Lock()
+	idx.servers = serversCopy
+	idx.corpus = corpus
+	idx.embeddings = embeddings
+	idx.mu.Unlock()
 }
 
 // Search returns servers matching the query. An empty query returns all servers.
@@ -165,6 +174,9 @@ func (idx *Index) RankedSearch(query Query, opts SearchOptions) []ScoredTool {
 
 	// Build a temporary corpus from candidates if pre-filtered.
 	corpus := idx.corpus
+	if corpus == nil {
+		return nil // Index not initialized yet
+	}
 	if len(candidates) != len(idx.servers) {
 		corpus = newBM25Corpus(candidates)
 	}

@@ -30,6 +30,24 @@ func TestTokenize_CamelCase(t *testing.T) {
 	}
 }
 
+func TestTokenize_ConsecutiveUppercase(t *testing.T) {
+	cases := []struct {
+		input string
+		want  []string
+	}{
+		{"HTTPServer", []string{"http", "server"}},
+		{"XMLParser", []string{"xml", "parser"}},
+		{"parseJSON", []string{"pars", "json"}},        // "parse" stems to "pars"
+		{"AWSLambdaFunction", []string{"aw", "lambda", "function"}}, // "aws" stems to "aw"
+	}
+	for _, tc := range cases {
+		got := tokenize(tc.input)
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("tokenize(%q) = %v, want %v", tc.input, got, tc.want)
+		}
+	}
+}
+
 func TestTokenize_Punctuation(t *testing.T) {
 	got := tokenize("Query Prometheus metrics, alerts, and recording rules.")
 	// Stemmed: query→queri, metrics→metric, alerts→alert, recording→record, rules→rule
