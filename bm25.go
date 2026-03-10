@@ -1,6 +1,7 @@
 package tdt
 
 import (
+	"math"
 	"strings"
 	"unicode"
 )
@@ -43,4 +44,124 @@ func splitCamelCase(s string) string {
 		b.WriteRune(r)
 	}
 	return b.String()
+}
+
+// bm25Doc represents a tokenized document in the corpus.
+type bm25Doc struct {
+	toolName   string
+	serverName string
+	tokens     []string
+	termFreq   map[string]int
+}
+
+// bm25Corpus holds the BM25 index for all tools.
+type bm25Corpus struct {
+	docs   []bm25Doc
+	idf    map[string]float64
+	avgLen float64
+	k1     float64
+	b      float64
+}
+
+// toolScore holds a BM25 score for a tool.
+type toolScore struct {
+	toolName   string
+	serverName string
+	score      float64
+}
+
+// buildCompositeText creates a searchable text blob from a server and tool.
+func buildCompositeText(s ServerMetadata, t ToolInfo) string {
+	var b strings.Builder
+	b.WriteString(t.Name)
+	b.WriteString(" ")
+	b.WriteString(t.Description)
+	b.WriteString(" ")
+	b.WriteString(s.Category)
+	for k, v := range s.Tags {
+		b.WriteString(" ")
+		b.WriteString(k)
+		b.WriteString(" ")
+		b.WriteString(v)
+	}
+	return b.String()
+}
+
+// newBM25Corpus builds a BM25 index from server metadata.
+func newBM25Corpus(servers []ServerMetadata) *bm25Corpus {
+	var docs []bm25Doc
+	for _, s := range servers {
+		for _, t := range s.Tools {
+			text := buildCompositeText(s, t)
+			tokens := tokenize(text)
+			tf := make(map[string]int)
+			for _, tok := range tokens {
+				tf[tok]++
+			}
+			docs = append(docs, bm25Doc{
+				toolName:   t.Name,
+				serverName: s.ServerName,
+				tokens:     tokens,
+				termFreq:   tf,
+			})
+		}
+	}
+
+	n := float64(len(docs))
+	docFreq := make(map[string]int)
+	totalLen := 0
+	for _, d := range docs {
+		totalLen += len(d.tokens)
+		seen := make(map[string]bool)
+		for _, tok := range d.tokens {
+			if !seen[tok] {
+				docFreq[tok]++
+				seen[tok] = true
+			}
+		}
+	}
+
+	idf := make(map[string]float64)
+	for term, df := range docFreq {
+		idf[term] = math.Log((n-float64(df)+0.5)/(float64(df)+0.5) + 1)
+	}
+
+	avgLen := 0.0
+	if len(docs) > 0 {
+		avgLen = float64(totalLen) / n
+	}
+
+	return &bm25Corpus{
+		docs:   docs,
+		idf:    idf,
+		avgLen: avgLen,
+		k1:     1.2,
+		b:      0.75,
+	}
+}
+
+// score computes BM25 scores for all documents against the query.
+func (c *bm25Corpus) score(query string) []toolScore {
+	queryTokens := tokenize(query)
+	scores := make([]toolScore, len(c.docs))
+
+	for i, doc := range c.docs {
+		s := 0.0
+		docLen := float64(len(doc.tokens))
+		for _, qt := range queryTokens {
+			tf := float64(doc.termFreq[qt])
+			if tf == 0 {
+				continue
+			}
+			idf := c.idf[qt]
+			norm := 1 - c.b + c.b*(docLen/c.avgLen)
+			s += idf * (tf * (c.k1 + 1)) / (tf + c.k1*norm)
+		}
+		scores[i] = toolScore{
+			toolName:   doc.toolName,
+			serverName: doc.serverName,
+			score:      s,
+		}
+	}
+	return scores
 }
