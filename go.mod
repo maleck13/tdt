@@ -3,6 +3,7 @@ module github.com/maleck13/tdt
 go 1.25.5
 
 require (
+	github.com/kljensen/snowball v0.10.0
 	github.com/mark3labs/mcp-go v0.43.2
 	github.com/philippgille/chromem-go v0.7.0
 )

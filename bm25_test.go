@@ -32,7 +32,8 @@ func TestTokenize_CamelCase(t *testing.T) {
 
 func TestTokenize_Punctuation(t *testing.T) {
 	got := tokenize("Query Prometheus metrics, alerts, and recording rules.")
-	want := []string{"query", "prometheus", "metrics", "alerts", "and", "recording", "rules"}
+	// Stemmed: query→queri, metrics→metric, alerts→alert, recording→record, rules→rule
+	want := []string{"queri", "prometheus", "metric", "alert", "and", "record", "rule"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
@@ -49,9 +50,36 @@ func TestTokenize_ShortTokensDropped(t *testing.T) {
 
 func TestTokenize_MixedUnderscoreAndCamelCase(t *testing.T) {
 	got := tokenize("prom_queryAlerts")
-	want := []string{"prom", "query", "alerts"}
+	// Stemmed: query→queri, alerts→alert
+	want := []string{"prom", "queri", "alert"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+func TestTokenize_Stemming(t *testing.T) {
+	cases := []struct {
+		input string
+		want  []string
+	}{
+		// "networking" and "network" should produce the same stem
+		{"networking", []string{"network"}},
+		{"network", []string{"network"}},
+		// "deployment" and "deploy" should produce the same stem
+		{"deployment", []string{"deploy"}},
+		{"deploy", []string{"deploy"}},
+		// "configuration" and "configure" should produce the same stem
+		{"configuration", []string{"configur"}},
+		{"configure", []string{"configur"}},
+		// "monitoring" and "monitor" should produce the same stem
+		{"monitoring", []string{"monitor"}},
+		{"monitor", []string{"monitor"}},
+	}
+	for _, tc := range cases {
+		got := tokenize(tc.input)
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("tokenize(%q) = %v, want %v", tc.input, got, tc.want)
+		}
 	}
 }
 

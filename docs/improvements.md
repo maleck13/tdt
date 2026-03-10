@@ -29,6 +29,10 @@ The tool corpus is small (typically 10-200 short text blobs). A local embedding 
 - **Server hint in composite text:** Currently `buildCompositeText` uses tool name + description + category + tags. Adding the server-level `Hint` field would give BM25 more text to match against.
 - **Weighted fields:** Not all text is equally important. A match on the tool name could be weighted higher than a match in a tag value. BM25F (field-aware BM25) supports this but adds complexity.
 
+**Stemmer language configuration:**
+
+- The stemmer currently hardcodes `"english"` as the Snowball language. This should be configurable so that non-English tool descriptions are stemmed correctly. The `snowball` library supports many languages (e.g., `"spanish"`, `"french"`, `"german"`). Consider adding a `StemLanguage` option to `Index` or `SearchOptions`.
+
 **Benchmarking approach:**
 
 - **Expand the golden test set:** Add more queries, especially edge cases and queries that real agents would send. Target 30-50 test cases.

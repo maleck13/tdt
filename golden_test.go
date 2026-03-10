@@ -147,9 +147,8 @@ type goldenCase struct {
 func goldenCases() []goldenCase {
 	return []goldenCase{
 		{
-			// BM25 limitation: prom_alerts doesn't contain "metrics" or "query",
-			// so it scores lower than tools that do (pg_query, loki_query_logs).
-			// Semantic search should fix this by understanding "prometheus" context.
+			// prom_alerts doesn't contain "metrics" or "query" — it needs semantic
+			// understanding to know it's related to Prometheus. Stemming doesn't help here.
 			name:         "exact keyword match - prometheus",
 			query:        "prometheus metrics query",
 			expectTop1:   "prom_query",
@@ -216,11 +215,10 @@ func goldenCases() []goldenCase {
 			expectInTop3: []string{"redis_get", "redis_set"},
 		},
 		{
-			// BM25 limitation: no stemming, so "network" doesn't match "networking".
-			// "configuration" doesn't appear in lb_configure's description either.
-			// Semantic search should understand "network" ≈ "networking".
-			name:         "broad category match - networking",
-			query:        "load balancer configuration",
+			// With stemming: "network"→"network" matches "networking"→"network" (category),
+			// and "configuration"→"configur" matches "configure"→"configur" (description).
+			name:         "stemming match - network configuration",
+			query:        "network configuration",
 			expectTop1:   "lb_configure",
 			expectInTop3: []string{"lb_configure"},
 		},

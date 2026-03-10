@@ -4,6 +4,8 @@ import (
 	"math"
 	"strings"
 	"unicode"
+
+	"github.com/kljensen/snowball"
 )
 
 // tokenize splits text into lowercase tokens, splitting on whitespace,
@@ -21,13 +23,18 @@ func tokenize(text string) []string {
 	parts := strings.FieldsFunc(expanded, func(r rune) bool {
 		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
 	})
-	// Lowercase and filter short tokens.
+	// Lowercase, stem, and filter short tokens.
 	var tokens []string
 	for _, p := range parts {
 		p = strings.ToLower(p)
-		if len(p) >= 2 {
-			tokens = append(tokens, p)
+		if len(p) < 2 {
+			continue
 		}
+		stemmed, err := snowball.Stem(p, "english", false)
+		if err == nil && len(stemmed) >= 2 {
+			p = stemmed
+		}
+		tokens = append(tokens, p)
 	}
 	return tokens
 }
