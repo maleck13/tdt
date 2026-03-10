@@ -1,20 +1,32 @@
 package tdt
 
 import (
+	"context"
+	"log"
+	"math"
 	"sort"
 	"sync"
+
+	chromem "github.com/philippgille/chromem-go"
 )
 
 // Index holds the searchable metadata for all registered servers.
 type Index struct {
-	mu      sync.RWMutex
-	servers []ServerMetadata
-	corpus  *bm25Corpus
+	mu            sync.RWMutex
+	servers       []ServerMetadata
+	corpus        *bm25Corpus
+	embeddingFunc chromem.EmbeddingFunc
+	embeddings    [][]float32
 }
 
 // NewIndex creates a new empty Index.
 func NewIndex() *Index {
 	return &Index{}
+}
+
+// NewIndexWithEmbedder creates an index with BM25 + semantic search.
+func NewIndexWithEmbedder(embeddingFunc chromem.EmbeddingFunc) *Index {
+	return &Index{embeddingFunc: embeddingFunc}
 }
 
 // Update replaces the entire index with new metadata.
@@ -24,6 +36,25 @@ func (idx *Index) Update(servers []ServerMetadata) {
 	idx.servers = make([]ServerMetadata, len(servers))
 	copy(idx.servers, servers)
 	idx.corpus = newBM25Corpus(idx.servers)
+
+	// Compute embeddings if embedder is configured.
+	if idx.embeddingFunc != nil {
+		embeddings := make([][]float32, len(idx.corpus.docs))
+		for i, doc := range idx.corpus.docs {
+			text := buildCompositeText(
+				findServer(idx.servers, doc.serverName),
+				findTool(idx.servers, doc.serverName, doc.toolName),
+			)
+			emb, err := idx.embeddingFunc(context.Background(), text)
+			if err != nil {
+				log.Printf("tdt: failed to embed tool %s: %v, semantic search disabled", doc.toolName, err)
+				idx.embeddings = nil
+				return
+			}
+			embeddings[i] = emb
+		}
+		idx.embeddings = embeddings
+	}
 }
 
 // Search returns servers matching the query. An empty query returns all servers.
@@ -141,15 +172,53 @@ func (idx *Index) RankedSearch(query Query, opts SearchOptions) []ScoredTool {
 	// Score with BM25.
 	bm25Scores := corpus.score(query.Text)
 
-	// Normalize BM25 scores to 0-1.
+	// If embedder available and embeddings exist, run hybrid.
+	if idx.embeddingFunc != nil && idx.embeddings != nil {
+		queryEmb, err := idx.embeddingFunc(context.Background(), query.Text)
+		if err != nil {
+			log.Printf("tdt: query embedding failed: %v, falling back to BM25", err)
+		} else {
+			semanticScores := make([]toolScore, len(bm25Scores))
+			for i, doc := range corpus.docs {
+				embIdx := idx.findEmbeddingIndex(doc.toolName, doc.serverName)
+				sim := float64(0)
+				if embIdx >= 0 {
+					sim = cosineSimilarity(queryEmb, idx.embeddings[embIdx])
+				}
+				semanticScores[i] = toolScore{
+					toolName:   doc.toolName,
+					serverName: doc.serverName,
+					score:      sim,
+				}
+			}
+
+			combined := combineRRF(bm25Scores, semanticScores, 60)
+
+			var results []ScoredTool
+			for _, s := range combined {
+				if opts.MinScore > 0 && s.score < opts.MinScore {
+					continue
+				}
+				results = append(results, ScoredTool{
+					ToolName:   s.toolName,
+					ServerName: s.serverName,
+					Score:      s.score,
+				})
+				if opts.TopK > 0 && len(results) >= opts.TopK {
+					break
+				}
+			}
+			return results
+		}
+	}
+
+	// BM25-only path (fallback or no embedder).
 	normalized := normalizeBM25(bm25Scores)
 
-	// Sort descending.
 	sort.Slice(normalized, func(i, j int) bool {
 		return normalized[i].score > normalized[j].score
 	})
 
-	// Apply MinScore and TopK.
 	var results []ScoredTool
 	for _, s := range normalized {
 		if opts.MinScore > 0 && s.score < opts.MinScore {
@@ -165,4 +234,51 @@ func (idx *Index) RankedSearch(query Query, opts SearchOptions) []ScoredTool {
 		}
 	}
 	return results
+}
+
+func findServer(servers []ServerMetadata, name string) ServerMetadata {
+	for _, s := range servers {
+		if s.ServerName == name {
+			return s
+		}
+	}
+	return ServerMetadata{}
+}
+
+func findTool(servers []ServerMetadata, serverName, toolName string) ToolInfo {
+	for _, s := range servers {
+		if s.ServerName == serverName {
+			for _, t := range s.Tools {
+				if t.Name == toolName {
+					return t
+				}
+			}
+		}
+	}
+	return ToolInfo{Name: toolName}
+}
+
+func (idx *Index) findEmbeddingIndex(toolName, serverName string) int {
+	for i, doc := range idx.corpus.docs {
+		if doc.toolName == toolName && doc.serverName == serverName {
+			return i
+		}
+	}
+	return -1
+}
+
+func cosineSimilarity(a, b []float32) float64 {
+	if len(a) != len(b) {
+		return 0
+	}
+	var dot, normA, normB float64
+	for i := range a {
+		dot += float64(a[i]) * float64(b[i])
+		normA += float64(a[i]) * float64(a[i])
+		normB += float64(b[i]) * float64(b[i])
+	}
+	if normA == 0 || normB == 0 {
+		return 0
+	}
+	return dot / (math.Sqrt(normA) * math.Sqrt(normB))
 }

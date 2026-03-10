@@ -1,6 +1,13 @@
 package tdt
 
-import "testing"
+import (
+	"context"
+	"fmt"
+	"math"
+	"testing"
+
+	chromem "github.com/philippgille/chromem-go"
+)
 
 func TestRankedSearch_BM25Only_RanksRelevantToolsFirst(t *testing.T) {
 	idx := NewIndex()
@@ -78,5 +85,50 @@ func TestRankedSearch_NoMatch(t *testing.T) {
 	results := idx.RankedSearch(Query{Text: "xyznonexistent"}, SearchOptions{MinScore: 0.01})
 	if len(results) != 0 {
 		t.Fatalf("expected 0 results, got %d", len(results))
+	}
+}
+
+// mockEmbeddingFunc returns a deterministic embedding based on text length.
+// Not semantically meaningful but lets us verify the hybrid path runs.
+func mockEmbeddingFunc() chromem.EmbeddingFunc {
+	return func(ctx context.Context, text string) ([]float32, error) {
+		v := make([]float32, 3)
+		n := float32(len(text) % 10)
+		v[0] = n / 10.0
+		v[1] = (10 - n) / 10.0
+		v[2] = 0.5
+		mag := float32(math.Sqrt(float64(v[0]*v[0] + v[1]*v[1] + v[2]*v[2])))
+		for i := range v {
+			v[i] /= mag
+		}
+		return v, nil
+	}
+}
+
+func TestRankedSearch_Hybrid_UsesEmbedder(t *testing.T) {
+	idx := NewIndexWithEmbedder(mockEmbeddingFunc())
+	idx.Update(testServers())
+
+	results := idx.RankedSearch(Query{Text: "prometheus metrics"}, SearchOptions{})
+	if len(results) == 0 {
+		t.Fatal("expected results from hybrid search")
+	}
+	for _, r := range results {
+		if r.Score <= 0 {
+			t.Fatalf("expected positive score, got %f for %s", r.Score, r.ToolName)
+		}
+	}
+}
+
+func TestRankedSearch_Hybrid_FallsBackOnEmbedderError(t *testing.T) {
+	failingEmbedder := chromem.EmbeddingFunc(func(ctx context.Context, text string) ([]float32, error) {
+		return nil, fmt.Errorf("embedding service unavailable")
+	})
+	idx := NewIndexWithEmbedder(failingEmbedder)
+	idx.Update(testServers())
+
+	results := idx.RankedSearch(Query{Text: "prometheus metrics"}, SearchOptions{})
+	if len(results) == 0 {
+		t.Fatal("expected BM25 fallback results despite embedder failure")
 	}
 }
