@@ -30,6 +30,107 @@ idx.Update(servers)
 scored := idx.RankedSearch(tdt.Query{Text: "check CPU metrics"}, tdt.SearchOptions{TopK: 5})
 ```
 
+## Using Ollama for Semantic Search
+
+[Ollama](https://ollama.com) runs embedding models locally, so you don't need an external API key. This example shows how to wire it into the mcp-gateway broker.
+
+### Prerequisites
+
+1. Install Ollama: https://ollama.com/download
+2. Pull an embedding model:
+   ```bash
+   ollama pull nomic-embed-text
+   ```
+3. Ollama runs on `http://localhost:11434` by default.
+
+### Broker Integration
+
+```go
+package main
+
+import (
+	"fmt"
+
+	chromem "github.com/philippgille/chromem-go"
+	"github.com/maleck13/tdt"
+)
+
+func main() {
+	// Create an index with Ollama embeddings.
+	// nomic-embed-text is a good general-purpose embedding model (768 dimensions).
+	embeddingFunc := chromem.NewEmbeddingFuncOllama(
+		"nomic-embed-text",
+		"http://localhost:11434/api",
+	)
+	idx := tdt.NewIndexWithEmbedder(embeddingFunc)
+
+	// Register your MCP servers (normally from broker config / CRD).
+	idx.Update([]tdt.ServerMetadata{
+		{
+			ServerName: "prometheus-tools",
+			Category:   "observability",
+			Tags:       map[string]string{"environment": "production"},
+			Hint:       "Query Prometheus metrics, alerts, and recording rules",
+			Tools: []tdt.ToolInfo{
+				{Name: "prom_query", Description: "Run a PromQL query against Prometheus"},
+				{Name: "prom_alerts", Description: "List active Prometheus alerts"},
+			},
+		},
+		{
+			ServerName: "github-tools",
+			Category:   "cicd",
+			Tags:       map[string]string{"department": "engineering"},
+			Hint:       "Interact with GitHub repositories and pull requests",
+			Tools: []tdt.ToolInfo{
+				{Name: "gh_create_pr", Description: "Create a new pull request"},
+				{Name: "gh_list_issues", Description: "List open issues in a repository"},
+			},
+		},
+	})
+
+	// Search using natural language — hybrid BM25 + semantic scoring.
+	results := idx.RankedSearch(
+		tdt.Query{Text: "check CPU usage"},
+		tdt.SearchOptions{TopK: 3, MinScore: 0.01},
+	)
+
+	for _, r := range results {
+		fmt.Printf("%-20s (server: %s, score: %.4f)\n", r.ToolName, r.ServerName, r.Score)
+	}
+}
+```
+
+### How it works
+
+1. On `idx.Update()`, each tool's composite text (name + description + category + tags) is sent to Ollama to generate an embedding vector. This happens once when the broker config changes.
+2. On `idx.RankedSearch()`, the query text is embedded and compared against all tool embeddings using cosine similarity. This score is combined with the BM25 keyword score using Reciprocal Rank Fusion (RRF).
+3. If Ollama is unavailable at query time, the search falls back to BM25-only — it degrades gracefully.
+
+### Alternative models
+
+Any Ollama model that supports embeddings works. Some options:
+
+| Model | Dimensions | Notes |
+|---|---|---|
+| `nomic-embed-text` | 768 | Good general-purpose, recommended |
+| `all-minilm` | 384 | Smaller, faster |
+| `mxbai-embed-large` | 1024 | Higher quality, slower |
+
+```go
+// Use a different model
+embeddingFunc := chromem.NewEmbeddingFuncOllama("all-minilm", "http://localhost:11434/api")
+```
+
+### Without Ollama (BM25 only)
+
+If you don't want to run an embedding service, `NewIndex()` works with BM25 keyword search alone:
+
+```go
+idx := tdt.NewIndex() // no embedder — BM25 only
+idx.Update(servers)
+results := idx.RankedSearch(tdt.Query{Text: "check CPU usage"}, tdt.SearchOptions{TopK: 5})
+```
+
 ## BM25 Limitations
 
 BM25 is a keyword-based scoring algorithm. It works well for queries that share exact terms with tool descriptions but has known limitations:
