@@ -21,11 +21,12 @@ type Query struct {
 	Category string
 	Tags     map[string]string
 	Text     string // natural language query for relevance scoring
+	Regex    string // regex pattern for matching tool name or description
 }
 
 // IsEmpty returns true if the query has no filters set.
 func (q Query) IsEmpty() bool {
-	return q.Category == "" && len(q.Tags) == 0 && q.Text == ""
+	return q.Category == "" && len(q.Tags) == 0 && q.Text == "" && q.Regex == ""
 }
 
 // CatalogCategory represents a category in the catalog response.

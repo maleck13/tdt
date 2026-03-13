@@ -281,6 +281,77 @@ func TestGolden_BM25Accuracy(t *testing.T) {
 	}
 }
 
+// TestGolden_RegexAccuracy runs regex search tests against the golden corpus.
+func TestGolden_RegexAccuracy(t *testing.T) {
+	idx := NewIndex()
+	idx.Update(goldenServers())
+
+	cases := []struct {
+		name       string
+		regex      string
+		expectAll  []string // all expected matches (order-independent)
+		expectNone bool     // if true, expect no matches
+	}{
+		{
+			name:      "exact name",
+			regex:     "prom_query",
+			expectAll: []string{"prom_query"},
+		},
+		{
+			name:      "prefix wildcard",
+			regex:     "prom_.*",
+			expectAll: []string{"prom_query", "prom_alerts"},
+		},
+		{
+			name:      "suffix pattern",
+			regex:     ".*_query",
+			expectAll: []string{"prom_query", "pg_query"},
+		},
+		{
+			name:      "case insensitive",
+			regex:     "(?i)prometheus",
+			expectAll: []string{"prom_query", "prom_alerts"},
+		},
+		{
+			name:      "alternation",
+			regex:     "(?i)github|slack",
+			expectAll: []string{"gh_create_pr", "gh_list_issues", "slack_send_message", "slack_list_channels"},
+		},
+		{
+			name:       "no match",
+			regex:      "xyznonexistent",
+			expectNone: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			results := idx.RegexSearch(Query{Regex: tc.regex}, SearchOptions{})
+
+			if tc.expectNone {
+				if len(results) != 0 {
+					t.Errorf("expected no matches, got %d", len(results))
+				}
+				return
+			}
+
+			got := map[string]bool{}
+			for _, r := range results {
+				got[r.ToolName] = true
+			}
+			for _, expected := range tc.expectAll {
+				if !got[expected] {
+					names := make([]string, 0, len(results))
+					for _, r := range results {
+						names = append(names, r.ToolName)
+					}
+					t.Errorf("expected %q in results, got %v", expected, names)
+				}
+			}
+		})
+	}
+}
+
 func top3Names(results []ScoredTool, limit int) []string {
 	var names []string
 	for i, r := range results {

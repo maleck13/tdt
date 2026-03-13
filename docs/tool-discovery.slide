@@ -57,14 +57,15 @@ The agent calls them normally.
 **Search modes:**
 
 1. **Exact match** — filter by category and tags
-2. **BM25 keyword search** — relevance-ranked with Snowball stemming
-3. **Hybrid BM25 + semantic** — combines BM25 with cosine similarity via Reciprocal Rank Fusion
+2. **Regex search** — match tool names/descriptions with regex patterns (e.g., `"prom_.*"`, `"(?i)weather"`, `"github|slack"`)
+3. **BM25 keyword search** — relevance-ranked with Snowball stemming
+4. **Hybrid BM25 + semantic** — combines BM25 with cosine similarity via Reciprocal Rank Fusion
 
 BM25 parameters are configurable.
 
 **Reciprocal Rank Fusion (RRF)** combines rankings from multiple search methods (BM25 + semantic) into a single ranked list.
 
-: The composite text for indexing concatenates tool name + description + category + tags. Tokenization splits camelCase and underscore-separated names, then applies Snowball English stemming. RRF with k=60 is a well-established default from the original Cormack et al. paper. It's simple, parameter-free beyond k, and avoids the need to normalize scores across different ranking methods.
+: Regex search is the most lightweight mode — compile a pattern, match against tool name and description, done. All matches score 1.0 (binary match/no-match). This is the pattern LLM agents naturally produce when they know tool naming conventions (e.g., all Prometheus tools start with "prom_"). No indexing, no embeddings, no external dependencies. Zero additional token cost beyond the query itself. The composite text for BM25 indexing concatenates tool name + description + category + tags. Tokenization splits camelCase and underscore-separated names, then applies Snowball English stemming. RRF with k=60 is a well-established default from the original Cormack et al. paper. It's simple, parameter-free beyond k, and avoids the need to normalize scores across different ranking methods.
 
 ## Server Metadata
 
@@ -201,7 +202,7 @@ Sending `notifications/tools/list_changed` from inside a tool handler causes a r
 Tool discovery is a protocol-level optimization for MCP gateways:
 
 - **Browse** — `discover_tools()` returns the catalog
-- **Search** — `discover_tools(query="...")` finds and selects tools
+- **Search** — `discover_tools(query="...")` finds tools via BM25 or regex
 - **Wait one turn** — definitions update via `notifications/tools/list_changed`
 - **Use** — scoped tools available with reduced token cost
 - **Switch** — `discover_tools(reset=true, query="...")` re-scopes
