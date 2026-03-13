@@ -1,0 +1,213 @@
+# Tool Discovery for MCP Gateway
+Reducing token consumption through relevance-ranked tool scoping
+Tags: mcp, tool-discovery, ai, gateway
+
+## The Problem: Token Cost and Tool Accuracy
+
+Every tool definition sent to an AI agent costs tokens — **every single turn**.
+
+- 10 tools ≈ 3,000 tokens per turn
+- 50 tools ≈ 15,000 tokens per turn
+- 200 tools ≈ 60,000 tokens per turn
+
+Over a 20-turn conversation with 50 tools: **300,000 tokens** just for tool definitions.
+
+But cost isn't the only problem — **accuracy degrades** as tool count grows. With hundreds of tools in context, agents are more likely to select the wrong tool, hallucinate parameters, or miss the right tool entirely. Fewer, more relevant tools means better tool selection.
+
+: The cost scales linearly with both tool count and conversation length. The accuracy issue is well-documented in LLM research — more options in context leads to worse selection. Scoping to relevant tools improves both cost and correctness.
+
+## Tool Discovery: The Idea
+
+What if the agent could **search** for relevant tools and dynamically scope its session?
+
+Tool discovery creates a **dynamic Virtual MCP server** scoped around the agent's current problem space:
+
+- Browse a lightweight catalog (~300 tokens)
+- Search with natural language queries
+- Scope the session to only matched tools
+- Switch to a different scope when the task changes
+
+- The resulting tool list still has **authorization filters applied**
+- If the search fails or returns no matches, the agent can call `discover_tools(reset=true)` to return to the full list
+
+: This is analogous to a package manager — you don't install every package, you search for what you need. The virtual MCP server is per-session and ephemeral. Authorization is enforced by the existing JWT-based filtering in the broker's FilterTools hook, which runs before the discovery filter. The reset fallback ensures the agent is never stuck.
+
+## How It Works: Two-Turn Flow
+
+**Turn 1 — Search:**
+
+The agent calls `discover_tools(query="restaurant booking")`.
+
+The broker runs BM25 ranked search, stores the selection, and responds:
+
+    "Found 2 tools. Your tool list will update on the next turn.
+     End your current turn now."
+
+**Turn 2 — Use:**
+
+The agent's `tools/list` has been refreshed to only the matched tools.
+The agent calls them normally.
+
+: The one-turn delay exists because tools/list updates happen between turns via a notifications/tools/list_changed notification. The agent cannot use discovered tools in the same turn it searches.
+
+## The tdt Library
+
+`tdt` — Tool Discovery Tool. A single Go package for relevance-ranked MCP tool search.
+
+**Search modes:**
+
+1. **Exact match** — filter by category and tags
+2. **BM25 keyword search** — relevance-ranked with Snowball stemming
+3. **Hybrid BM25 + semantic** — combines BM25 with cosine similarity via Reciprocal Rank Fusion
+
+BM25 parameters are configurable.
+
+**Reciprocal Rank Fusion (RRF)** combines rankings from multiple search methods (BM25 + semantic) into a single ranked list.
+
+: The composite text for indexing concatenates tool name + description + category + tags. Tokenization splits camelCase and underscore-separated names, then applies Snowball English stemming. RRF with k=60 is a well-established default from the original Cormack et al. paper. It's simple, parameter-free beyond k, and avoids the need to normalize scores across different ranking methods.
+
+## Server Metadata
+
+Backend servers are annotated with discovery metadata in the CRD:
+
+    apiVersion: mcp.kagenti.com/v1alpha1
+    kind: MCPServerRegistration
+    metadata:
+      name: dining-server
+    spec:
+      category: dining
+      tags:
+        sdk: fastmcp
+        team: platform
+      hint: "Restaurant search, table reservations, city guides"
+
+The catalog returns categories, hints, and tags — enough for the agent to decide what to search for without loading any tool schemas.
+
+## Indexing and Scoring
+
+Tools are indexed by building a composite text from their metadata:
+
+    tool name + description + category + hint + tags
+
+The tokenizer:
+
+- Splits camelCase: `bookRestaurant` → `[book, restaurant]`
+- Splits underscores: `book_restaurant` → `[book, restaurant]`
+- Applies Snowball stemming: `restaurants` → `restaur`, `booking` → `book`
+
+BM25 scores are normalized and a configurable threshold applied to filter noise.
+
+## Token Savings (estimates / not verified)
+
+Per-turn cost comparison:
+
+    Scenario                    Tools    Tokens/turn   Saving
+    ─────────────────────────   ─────    ───────────   ──────
+    No discovery (all tools)      12        ~2,800        —
+    After scoping (2 matches)      3          ~600       78%
+    After scoping (1 match)        2          ~400       86%
+
+Over a 20-turn conversation:
+
+    No discovery:           20 × 2,800 = 56,000 tokens
+    Scope on turn 1, use:   2,800 + 19 × 600 = 14,200 tokens  (75% saved)
+
+: The savings increase dramatically with more tools. At 200 tools behind the gateway, scoping saves 99% of tool definition tokens per turn.
+
+## Demo: Search and Scope
+
+Agent asks: "I need to book a restaurant. Find relevant tools."
+
+Agent calls `discover_tools(query="restaurant booking")`.
+
+Response:
+
+    {
+      "action": "search",
+      "tools_matched": 2,
+      "message": "Found 2 tools. End your current turn now."
+    }
+
+Agent waits one turn. MCP Gateway sends a `notifications/tools/list_changed` to force an update of the tools. On the next turn, only 3 tools in context:
+
+- `test3_restaurants`
+- `test3_book_restaurant`
+- `discover_tools` (always included)
+
+## Demo: Use Scoped Tools
+
+Agent asks: "What restaurants are available in Tokyo?"
+
+Agent calls `test3_restaurants(city="Tokyo")`:
+
+    [
+      {"name": "Sukiyabashi Jiro", "cuisine": "Sushi",
+       "rating": 4.9, "available_time": "17:00"},
+      {"name": "Ichiran Shibuya", "cuisine": "Ramen",
+       "rating": 4.5, "available_time": "12:00"},
+      {"name": "Gonpachi", "cuisine": "Japanese",
+       "rating": 4.3, "available_time": "19:00"}
+    ]
+
+Agent calls `test3_book_restaurant(city="Tokyo", restaurant="Gonpachi")`:
+
+    "Reservation confirmed at Gonpachi in Tokyo. Booking reference: tok-4821"
+
+## Demo: Switch Context
+
+Agent asks: "Now I need to send a message to my contacts."
+
+Agent calls `discover_tools(reset=true, query="send message contacts")`.
+
+Waits one turn. New tools loaded:
+
+- `test1_friends` — list contact information
+- `test1_send_message` — send a message to contacts
+- `discover_tools`
+
+The restaurant tools are **gone** from context. Token cost stays at ~600.
+
+## Session Tool Scope
+
+The discovered tools are scoped to the agent's MCP session with the gateway. Each session maintains its own tool selection independently.
+
+Stored in the existing session cache alongside backend session mappings:
+
+    gateway-jwt → {
+      "server1":       "backend-session-1",
+      "server2":       "backend-session-2",
+      "__tdt_tools":   '["test3_restaurants","test3_book_restaurant"]'
+    }
+
+- Redis persistence if needed
+- Cleaned up automatically when sessions expire
+- Filtered in the broker's `FilterTools` hook before `tools/list` responses
+
+## The Notification Timing Challenge
+
+Sending `notifications/tools/list_changed` from inside a tool handler causes a race:
+
+1. mcp-go upgrades the POST response to SSE
+2. Notification delivered **before** the tool call result
+3. Client re-fetches `tools/list` before processing the result
+4. Agent sees stale tool definitions
+
+**Solution:** Don't return tool names in the response. Instruct the agent to end its turn. Tool definitions update between turns via the notification.
+
+: An alternative fix would be to intercept the response in the router's ext_proc and send the notification after the response is flushed. This would avoid the SSE upgrade race entirely.
+
+## Summary
+
+Tool discovery is a protocol-level optimization for MCP gateways:
+
+- **Browse** — `discover_tools()` returns the catalog
+- **Search** — `discover_tools(query="...")` finds and selects tools
+- **Wait one turn** — definitions update via `notifications/tools/list_changed`
+- **Use** — scoped tools available with reduced token cost
+- **Switch** — `discover_tools(reset=true, query="...")` re-scopes
+
+Savings: **75-99%** of tool definition tokens depending on gateway size.
+
+The tdt library is designed to be embedded in any MCP server, not just mcp-gateway. It has no dependencies on the gateway's internals.
+
+Now a live demo!

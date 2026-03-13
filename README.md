@@ -2,10 +2,32 @@
 
 A Go library for discovering and filtering MCP (Model Context Protocol) tools. Designed for use with the [mcp-gateway](https://github.com/Kuadrant/mcp-gateway) broker.
 
+## Why Tool Discovery?
+
+MCP gateways aggregate tools from many upstream servers. A gateway with 10 servers might expose 50+ tools, each with a name, description, and full input schema. Every one of those tool definitions is included in the AI agent's context on **every turn** of the conversation — not just the first message.
+
+This creates two problems:
+
+1. **Token cost.** Dozens of tool schemas consume thousands of tokens per turn. Over a multi-turn session this adds up significantly.
+2. **Tool selection accuracy.** The more tools in context, the more likely the agent picks the wrong one — especially when tools have similar names or overlapping descriptions.
+
+tdt solves this by letting agents **search for relevant tools first**, then scoping the session to only the tools they need. Instead of 50 tool schemas in context per turn, the agent sees 2-3 discovery tools initially, runs one search, and then works with a focused set of 5-6 tools for the rest of the session.
+
+### How It Works With Agents
+
+The gateway can be configured to initially return only the tdt tools (`discover_tools`, `search_tools`) in `tools/list`. The agent flow is:
+
+1. **Connect** — agent initializes a session and receives `tools/list` with only the discovery tools (2-3 schemas instead of 50+)
+2. **Search** — agent calls `discover_tools` with keywords from its task (e.g. `"kubernetes deploy"`, not a full sentence) to find relevant tools
+3. **Work** — subsequent `tools/list` calls return only the matched tools, keeping context small for the rest of the session
+4. **Re-search** — agent can call the search tool again to change or expand the scoped tool set, or list all tools if needed
+
+The key insight is that agents form **keyword queries**, not natural language sentences. A query like `"prometheus alerts metrics"` is more effective than `"I want to check if there are any alerting issues in my monitoring system"`. The tool descriptions guide this.
+
 ## Features
 
 - **Exact-match filtering** by category and tags (`Search`, `MatchingToolNames`)
-- **Relevance-ranked search** using BM25 keyword scoring (`RankedSearch`)
+- **Relevance-ranked search** using porter stemming and BM25 keyword scoring (`RankedSearch`)
 - **Optional semantic search** via embeddings (chromem-go) combined with BM25 using Reciprocal Rank Fusion
 - **Discovery tool** (`discover_tools`) that exposes the catalog as an MCP tool
 

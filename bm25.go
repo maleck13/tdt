@@ -95,6 +95,10 @@ func buildCompositeText(s ServerMetadata, t ToolInfo) string {
 	b.WriteString(t.Description)
 	b.WriteString(" ")
 	b.WriteString(s.Category)
+	if s.Hint != "" {
+		b.WriteString(" ")
+		b.WriteString(s.Hint)
+	}
 
 	// Sort tag keys for deterministic iteration order.
 	keys := make([]string, 0, len(s.Tags))
