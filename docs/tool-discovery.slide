@@ -212,3 +212,7 @@ Savings: **75-99%** of tool definition tokens depending on gateway size.
 The tdt library is designed to be embedded in any MCP server, not just mcp-gateway. It has no dependencies on the gateway's internals.
 
 Now a live demo!
+
+## Appendix: References
+
+- Anthropic Tool Search Tool: [[https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool]]
