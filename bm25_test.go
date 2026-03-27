@@ -16,7 +16,8 @@ func TestTokenize_Basic(t *testing.T) {
 
 func TestTokenize_Underscores(t *testing.T) {
 	got := tokenize("brave_web_search")
-	want := []string{"brave", "web", "search"}
+	// "search" is a stop word — filtered out
+	want := []string{"brave", "web"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
@@ -24,7 +25,8 @@ func TestTokenize_Underscores(t *testing.T) {
 
 func TestTokenize_CamelCase(t *testing.T) {
 	got := tokenize("getWeather")
-	want := []string{"get", "weather"}
+	// "get" is a stop word — filtered out
+	want := []string{"weather"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
@@ -51,7 +53,8 @@ func TestTokenize_ConsecutiveUppercase(t *testing.T) {
 func TestTokenize_Punctuation(t *testing.T) {
 	got := tokenize("Query Prometheus metrics, alerts, and recording rules.")
 	// Stemmed: query→queri, metrics→metric, alerts→alert, recording→record, rules→rule
-	want := []string{"queri", "prometheus", "metric", "alert", "and", "record", "rule"}
+	// "and" is a stop word — filtered out
+	want := []string{"queri", "prometheus", "metric", "alert", "record", "rule"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
@@ -105,6 +108,30 @@ func TestTokenize_Empty(t *testing.T) {
 	got := tokenize("")
 	if len(got) != 0 {
 		t.Fatalf("expected empty, got %v", got)
+	}
+}
+
+func TestTokenize_StopWordsFiltered(t *testing.T) {
+	cases := []struct {
+		input string
+		want  []string
+	}{
+		// "search" and "get" are stop words — should be filtered
+		{"brave_web_search", []string{"brave", "web"}},
+		{"getWeather", []string{"weather"}},
+		// "list" and "set" are stop words
+		{"list all items", []string{"item"}},
+		{"set the value", []string{"valu"}}, // "value" stems to "valu"
+		// "info" and "data" are stop words
+		{"user info data", []string{"user"}},
+		// Non-stop words should pass through
+		{"prometheus metrics", []string{"prometheus", "metric"}},
+	}
+	for _, tc := range cases {
+		got := tokenize(tc.input)
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("tokenize(%q) = %v, want %v", tc.input, got, tc.want)
+		}
 	}
 }
 

@@ -88,6 +88,61 @@ func TestRankedSearch_NoMatch(t *testing.T) {
 	}
 }
 
+func TestRankedSearch_CommaSplitQuery_MaxScore(t *testing.T) {
+	idx := NewIndex()
+	idx.Update(goldenServers())
+
+	// Query with two unrelated intents separated by a comma.
+	// "send a message" should match slack tools; "DNS records" should match dns tools.
+	// Each tool should get its max score across sub-queries, not a diluted combined score.
+	results := idx.RankedSearch(Query{Text: "send a message, DNS records"}, SearchOptions{TopK: 5})
+	if len(results) == 0 {
+		t.Fatal("expected results")
+	}
+
+	// Both slack and dns tools should appear in results.
+	found := map[string]bool{}
+	for _, r := range results {
+		found[r.ToolName] = true
+	}
+	for _, want := range []string{"slack_send_message", "dns_lookup"} {
+		if !found[want] {
+			names := make([]string, len(results))
+			for i, r := range results {
+				names[i] = r.ToolName
+			}
+			t.Errorf("expected %q in results, got %v", want, names)
+		}
+	}
+}
+
+func TestRankedSearch_CommaSplitQuery_SingleSegment(t *testing.T) {
+	idx := NewIndex()
+	idx.Update(goldenServers())
+
+	// A query without commas should behave identically to before.
+	withoutComma := idx.RankedSearch(Query{Text: "prometheus metrics"}, SearchOptions{TopK: 3})
+	if len(withoutComma) == 0 {
+		t.Fatal("expected results")
+	}
+	if withoutComma[0].ToolName != "prom_query" {
+		t.Fatalf("expected prom_query first, got %s", withoutComma[0].ToolName)
+	}
+}
+
+func TestRankedSearch_DefaultMinScore(t *testing.T) {
+	idx := NewIndex()
+	idx.Update(testServers())
+
+	// With default MinScore (0 → DefaultMinScore), weak matches should be filtered.
+	results := idx.RankedSearch(Query{Text: "prometheus metrics"}, SearchOptions{})
+	for _, r := range results {
+		if r.Score < DefaultMinScore {
+			t.Fatalf("result %s has score %f below DefaultMinScore %f", r.ToolName, r.Score, DefaultMinScore)
+		}
+	}
+}
+
 // mockEmbeddingFunc returns a deterministic embedding based on text length.
 // Not semantically meaningful but lets us verify the hybrid path runs.
 func mockEmbeddingFunc() chromem.EmbeddingFunc {
@@ -109,7 +164,8 @@ func TestRankedSearch_Hybrid_UsesEmbedder(t *testing.T) {
 	idx := NewIndexWithEmbedder(mockEmbeddingFunc())
 	idx.Update(testServers())
 
-	results := idx.RankedSearch(Query{Text: "prometheus metrics"}, SearchOptions{})
+	// Use explicit low MinScore since mock embedder produces low RRF scores.
+	results := idx.RankedSearch(Query{Text: "prometheus metrics"}, SearchOptions{MinScore: 0.001})
 	if len(results) == 0 {
 		t.Fatal("expected results from hybrid search")
 	}

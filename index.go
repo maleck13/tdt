@@ -5,6 +5,7 @@ import (
 	"log"
 	"math"
 	"sort"
+	"strings"
 	"sync"
 
 	chromem "github.com/philippgille/chromem-go"
@@ -150,6 +151,11 @@ func (idx *Index) RankedSearch(query Query, opts SearchOptions) []ScoredTool {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 
+	// Apply default minimum score threshold when none specified.
+	if opts.MinScore == 0 {
+		opts.MinScore = DefaultMinScore
+	}
+
 	// If no text query, fall back to exact-match and return all matches with score 1.0.
 	if query.Text == "" {
 		matches := idx.searchLocked(query)
@@ -181,58 +187,21 @@ func (idx *Index) RankedSearch(query Query, opts SearchOptions) []ScoredTool {
 		corpus = newBM25Corpus(candidates)
 	}
 
-	// Score with BM25.
-	bm25Scores := corpus.score(query.Text)
+	// Split query on commas into sub-queries. Score each independently
+	// and take the max score per tool across sub-queries.
+	subQueries := splitQuerySegments(query.Text)
 
-	// If embedder available and embeddings exist, run hybrid.
-	if idx.embeddingFunc != nil && idx.embeddings != nil {
-		queryEmb, err := idx.embeddingFunc(context.Background(), query.Text)
-		if err != nil {
-			log.Printf("tdt: query embedding failed: %v, falling back to BM25", err)
-		} else {
-			semanticScores := make([]toolScore, len(bm25Scores))
-			for i, doc := range corpus.docs {
-				embIdx := idx.findEmbeddingIndex(doc.toolName, doc.serverName)
-				sim := float64(0)
-				if embIdx >= 0 {
-					sim = cosineSimilarity(queryEmb, idx.embeddings[embIdx])
-				}
-				semanticScores[i] = toolScore{
-					toolName:   doc.toolName,
-					serverName: doc.serverName,
-					score:      sim,
-				}
-			}
+	// Score each sub-query and merge with max-score strategy.
+	merged := idx.scoreSubQueries(corpus, subQueries)
 
-			combined := combineRRF(bm25Scores, semanticScores, 60)
-
-			var results []ScoredTool
-			for _, s := range combined {
-				if opts.MinScore > 0 && s.score < opts.MinScore {
-					continue
-				}
-				results = append(results, ScoredTool{
-					ToolName:   s.toolName,
-					ServerName: s.serverName,
-					Score:      s.score,
-				})
-				if opts.TopK > 0 && len(results) >= opts.TopK {
-					break
-				}
-			}
-			return results
-		}
-	}
-
-	// BM25-only path (fallback or no embedder).
-	normalized := normalizeBM25(bm25Scores)
-
-	sort.Slice(normalized, func(i, j int) bool {
-		return normalized[i].score > normalized[j].score
+	// Sort descending by score.
+	sort.Slice(merged, func(i, j int) bool {
+		return merged[i].score > merged[j].score
 	})
 
+	// Apply MinScore and TopK filters.
 	var results []ScoredTool
-	for _, s := range normalized {
+	for _, s := range merged {
 		if opts.MinScore > 0 && s.score < opts.MinScore {
 			continue
 		}
@@ -246,6 +215,83 @@ func (idx *Index) RankedSearch(query Query, opts SearchOptions) []ScoredTool {
 		}
 	}
 	return results
+}
+
+// splitQuerySegments splits a query on commas into trimmed, non-empty segments.
+func splitQuerySegments(text string) []string {
+	parts := strings.Split(text, ",")
+	var segments []string
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			segments = append(segments, p)
+		}
+	}
+	return segments
+}
+
+// scoreSubQueries scores each sub-query independently and returns the max
+// score per tool across all sub-queries.
+func (idx *Index) scoreSubQueries(corpus *bm25Corpus, subQueries []string) []toolScore {
+	type toolKey struct {
+		toolName   string
+		serverName string
+	}
+
+	best := map[toolKey]float64{}
+
+	for _, sq := range subQueries {
+		bm25Scores := corpus.score(sq)
+
+		// If embedder available and embeddings exist, run hybrid for this sub-query.
+		if idx.embeddingFunc != nil && idx.embeddings != nil {
+			queryEmb, err := idx.embeddingFunc(context.Background(), sq)
+			if err != nil {
+				log.Printf("tdt: query embedding failed: %v, falling back to BM25", err)
+			} else {
+				semanticScores := make([]toolScore, len(bm25Scores))
+				for i, doc := range corpus.docs {
+					embIdx := idx.findEmbeddingIndex(doc.toolName, doc.serverName)
+					sim := float64(0)
+					if embIdx >= 0 {
+						sim = cosineSimilarity(queryEmb, idx.embeddings[embIdx])
+					}
+					semanticScores[i] = toolScore{
+						toolName:   doc.toolName,
+						serverName: doc.serverName,
+						score:      sim,
+					}
+				}
+				combined := combineRRF(bm25Scores, semanticScores, 60)
+				for _, s := range combined {
+					k := toolKey{s.toolName, s.serverName}
+					if s.score > best[k] {
+						best[k] = s.score
+					}
+				}
+				continue
+			}
+		}
+
+		// BM25-only path.
+		normalized := normalizeBM25(bm25Scores)
+		for _, s := range normalized {
+			k := toolKey{s.toolName, s.serverName}
+			if s.score > best[k] {
+				best[k] = s.score
+			}
+		}
+	}
+
+	merged := make([]toolScore, 0, len(best))
+	for k, score := range best {
+		merged = append(merged, toolScore{
+			toolName:   k.toolName,
+			serverName: k.serverName,
+			score:      score,
+		})
+	}
+	return merged
 }
 
 func findServer(servers []ServerMetadata, name string) ServerMetadata {

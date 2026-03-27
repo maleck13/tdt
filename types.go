@@ -47,10 +47,14 @@ type CatalogResponse struct {
 	Categories []CatalogCategory `json:"categories"`
 }
 
+// DefaultMinScore is applied when SearchOptions.MinScore is 0.
+// It filters out weak partial matches that add noise to results.
+const DefaultMinScore = 0.15
+
 // SearchOptions controls relevance search behavior.
 type SearchOptions struct {
 	TopK     int     // max results to return (0 means no limit)
-	MinScore float64 // minimum score threshold (0.0 means no threshold)
+	MinScore float64 // minimum score threshold (0.0 applies DefaultMinScore)
 }
 
 // ScoredTool is a tool with its relevance score.

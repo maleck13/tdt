@@ -9,9 +9,29 @@ import (
 	"github.com/kljensen/snowball"
 )
 
+// stopWords contains stemmed forms of common low-discriminative terms
+// that appear in many tool descriptions and inflate BM25 match counts.
+var stopWords = map[string]bool{
+	"search": true, // search, searching, searches
+	"get":    true, // get, gets, getting
+	"set":    true, // set, sets, setting
+	"list":   true, // list, lists, listing
+	"data":   true, // data
+	"info":   true, // info, information
+	"util":   true, // util, utility, utilities
+	"the":    true,
+	"and":    true,
+	"for":    true,
+	"with":   true,
+	"from":   true,
+	"that":   true,
+	"this":   true,
+	"all":    true,
+}
+
 // tokenize splits text into lowercase tokens, splitting on whitespace,
 // punctuation, underscores, and camelCase boundaries.
-// Tokens shorter than 2 characters are dropped.
+// Tokens shorter than 2 characters and stop words are dropped.
 func tokenize(text string) []string {
 	if text == "" {
 		return nil
@@ -24,7 +44,7 @@ func tokenize(text string) []string {
 	parts := strings.FieldsFunc(expanded, func(r rune) bool {
 		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
 	})
-	// Lowercase, stem, and filter short tokens.
+	// Lowercase, stem, filter short tokens, and remove stop words.
 	var tokens []string
 	for _, p := range parts {
 		p = strings.ToLower(p)
@@ -34,6 +54,9 @@ func tokenize(text string) []string {
 		stemmed, err := snowball.Stem(p, "english", false)
 		if err == nil && len(stemmed) >= 2 {
 			p = stemmed
+		}
+		if stopWords[p] {
+			continue
 		}
 		tokens = append(tokens, p)
 	}
