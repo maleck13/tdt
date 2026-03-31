@@ -268,7 +268,7 @@ func TestRankedSearch_Hybrid_FallsBackOnEmbedderError(t *testing.T) {
 	idx := NewIndexWithEmbedder(failingEmbedder)
 	idx.Update(testServers())
 
-	results := idx.RankedSearch(Query{Text: "prometheus metrics"}, SearchOptions{})
+	results := idx.RankedSearch(Query{Text: "PromQL query alerts"}, SearchOptions{})
 	if len(results) == 0 {
 		t.Fatal("expected BM25 fallback results despite embedder failure")
 	}

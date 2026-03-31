@@ -2,7 +2,6 @@ package tdt
 
 import (
 	"math"
-	"sort"
 	"strings"
 	"unicode"
 
@@ -118,33 +117,14 @@ type toolScore struct {
 	score      float64
 }
 
-// buildCompositeText creates a searchable text blob from a server and tool.
-// Tags are sorted by key for deterministic output.
-func buildCompositeText(s ServerMetadata, t ToolInfo) string {
-	var b strings.Builder
-	b.WriteString(t.Name)
-	b.WriteString(" ")
-	b.WriteString(t.Description)
-	b.WriteString(" ")
-	b.WriteString(s.Category)
-	if s.Hint != "" {
-		b.WriteString(" ")
-		b.WriteString(s.Hint)
-	}
-
-	// Sort tag keys for deterministic iteration order.
-	keys := make([]string, 0, len(s.Tags))
-	for k := range s.Tags {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		b.WriteString(" ")
-		b.WriteString(k)
-		b.WriteString(" ")
-		b.WriteString(s.Tags[k])
-	}
-	return b.String()
+// buildCompositeText creates a searchable text blob from a tool.
+// Only tool-level data (name + description) is included. Server-level metadata
+// (category, hint, tags) is excluded because it applies to every tool on the
+// server and inflates BM25 scores for irrelevant tools that happen to share
+// a server with relevant ones. Server metadata is used for pre-filtering via
+// category/tag matching instead.
+func buildCompositeText(_ ServerMetadata, t ToolInfo) string {
+	return t.Name + " " + t.Description
 }
 
 // newBM25Corpus builds a BM25 index from server metadata.

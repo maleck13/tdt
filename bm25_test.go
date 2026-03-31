@@ -145,9 +145,16 @@ func TestBuildCompositeText(t *testing.T) {
 		},
 	}
 	got := buildCompositeText(sm, sm.Tools[0])
-	for _, want := range []string{"prom_query", "Run a PromQL query", "observability", "department", "platform", "env", "prod"} {
+	// Only tool-level data should be included
+	for _, want := range []string{"prom_query", "Run a PromQL query"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("composite text %q missing %q", got, want)
+		}
+	}
+	// Server-level metadata should NOT be included
+	for _, excluded := range []string{"observability", "department", "platform", "env", "prod"} {
+		if strings.Contains(got, excluded) {
+			t.Fatalf("composite text %q should not contain server metadata %q", got, excluded)
 		}
 	}
 }
