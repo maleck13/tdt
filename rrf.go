@@ -61,8 +61,16 @@ func combineRRF(listA, listB []toolScore, k int) []toolScore {
 	return result
 }
 
-// normalizeBM25 normalizes BM25 scores to 0-1 range by dividing by the max score.
-// Used when running BM25-only (no semantic search).
+// bm25DampeningK controls the saturation point for BM25 normalization.
+// With k=2, a raw max BM25 of 2 produces a top score of 0.5, and a raw max
+// of 6 produces 0.75. This prevents weak single-token matches from being
+// inflated to high scores when they happen to be the best match in a sub-query.
+const bm25DampeningK = 2.0
+
+// normalizeBM25 normalizes BM25 scores using dampened normalization.
+// Instead of simple max-normalization (score/max → top always 1.0), it uses
+// score/(max+k) which keeps scores low when the absolute match quality is poor.
+// This prevents weak matches from being inflated when no tool truly matches a sub-query.
 func normalizeBM25(scores []toolScore) []toolScore {
 	if len(scores) == 0 {
 		return scores
@@ -78,8 +86,9 @@ func normalizeBM25(scores []toolScore) []toolScore {
 	if max == 0 {
 		return out
 	}
+	divisor := max + bm25DampeningK
 	for i := range out {
-		out[i].score = out[i].score / max
+		out[i].score = out[i].score / divisor
 	}
 	return out
 }

@@ -16,6 +16,15 @@ var stopWords = map[string]bool{
 	"get":    true, // get, gets, getting
 	"set":    true, // set, sets, setting
 	"list":   true, // list, lists, listing
+	"check":  true, // check, checking, checks — generic action verb
+	"send":   true, // send, sending, sends — generic action verb
+	"run":    true, // run, running, runs — generic action verb
+	"make":   true, // make, making, makes — generic action verb
+	"use":    true, // use, using, uses — generic action verb
+	"find":   true, // find, finding, finds — generic action verb
+	"show":   true, // show, showing, shows — generic action verb
+	"creat":  true, // create, creating, creates (stemmed form)
+	"return": true, // return, returning, returns — generic action verb
 	"data":   true, // data
 	"info":   true, // info, information
 	"util":   true, // util, utility, utilities

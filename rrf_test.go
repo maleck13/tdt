@@ -50,14 +50,33 @@ func TestNormalizeBM25Scores(t *testing.T) {
 		{toolName: "c", score: 0.0},
 	}
 	normalized := normalizeBM25(scores)
-	if normalized[0].score != 1.0 {
-		t.Fatalf("expected top score 1.0, got %f", normalized[0].score)
-	}
-	if normalized[1].score != 0.5 {
-		t.Fatalf("expected second score 0.5, got %f", normalized[1].score)
-	}
+	// With dampening k=2: divisor = 10+2 = 12
+	// a: 10/12 ≈ 0.833, b: 5/12 ≈ 0.417, c: 0/12 = 0.0
+	expectClose(t, "a", normalized[0].score, 10.0/12.0)
+	expectClose(t, "b", normalized[1].score, 5.0/12.0)
 	if normalized[2].score != 0.0 {
 		t.Fatalf("expected third score 0.0, got %f", normalized[2].score)
+	}
+}
+
+func TestNormalizeBM25Scores_DampensWeakMatches(t *testing.T) {
+	// When the best raw BM25 score is low (weak match), all scores should stay low.
+	scores := []toolScore{
+		{toolName: "a", score: 1.0},
+		{toolName: "b", score: 0.5},
+	}
+	normalized := normalizeBM25(scores)
+	// With dampening k=2: divisor = 1+2 = 3
+	// a: 1/3 ≈ 0.333, b: 0.5/3 ≈ 0.167
+	// Without dampening, 'a' would be 1.0 — inflating a weak match.
+	expectClose(t, "a", normalized[0].score, 1.0/3.0)
+	expectClose(t, "b", normalized[1].score, 0.5/3.0)
+}
+
+func expectClose(t *testing.T, name string, got, want float64) {
+	t.Helper()
+	if diff := got - want; diff > 0.001 || diff < -0.001 {
+		t.Fatalf("%s: expected %f, got %f", name, want, got)
 	}
 }
 

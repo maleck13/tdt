@@ -143,6 +143,91 @@ func TestRankedSearch_DefaultMinScore(t *testing.T) {
 	}
 }
 
+func TestRankedSearch_CommaQuery_FiltersIrrelevantUtilityTools(t *testing.T) {
+	// Regression test: a multi-intent query like "book a restaurant, check availability,
+	// send message to contacts" should NOT return generic utility tools like time, add,
+	// headers, pi, dozen, slow, etc.
+	idx := NewIndex()
+	idx.Update(gatewayTestServers())
+
+	results := idx.RankedSearch(Query{Text: "book a restaurant, check availability, send message to contacts"}, SearchOptions{})
+
+	relevant := map[string]bool{
+		"restaurants":     true,
+		"book_restaurant": true,
+		"friends":         true,
+		"greet":           true,
+		"hello_world":     true,
+	}
+	irrelevant := map[string]bool{
+		"time": true, "add": true, "dozen": true, "pi": true,
+		"get_weather": true, "headers": true, "get_headers": true,
+		"auth1234": true, "slow": true, "add_tool": true,
+	}
+
+	for _, r := range results {
+		if irrelevant[r.ToolName] {
+			t.Errorf("irrelevant tool %q should not appear in results (score: %f)", r.ToolName, r.Score)
+		}
+	}
+
+	// At least the core relevant tools should appear.
+	found := map[string]bool{}
+	for _, r := range results {
+		found[r.ToolName] = true
+	}
+	for _, want := range []string{"restaurants", "book_restaurant", "friends"} {
+		if !found[want] {
+			t.Errorf("expected relevant tool %q in results", want)
+		}
+	}
+	_ = relevant // used for documentation
+}
+
+// gatewayTestServers mimics the mcp-gateway test server corpus.
+func gatewayTestServers() []ServerMetadata {
+	return []ServerMetadata{
+		{
+			ServerName: "test1",
+			ToolPrefix: "test1_",
+			Tools: []ToolInfo{
+				{Name: "greet", Description: "Say hi to someone"},
+				{Name: "time", Description: "Get current time"},
+				{Name: "slow", Description: "Wait N seconds"},
+				{Name: "headers", Description: "Get HTTP headers"},
+				{Name: "friends", Description: "List contact information of friends"},
+				{Name: "add_tool", Description: "Dynamically add a new tool"},
+			},
+		},
+		{
+			ServerName: "test2",
+			ToolPrefix: "test2_",
+			Tools: []ToolInfo{
+				{Name: "hello_world", Description: "Say hello to someone"},
+				{Name: "time", Description: "Get current time"},
+				{Name: "headers", Description: "Get HTTP headers"},
+				{Name: "auth1234", Description: "Check authorization header"},
+				{Name: "slow", Description: "Wait N seconds"},
+			},
+		},
+		{
+			ServerName: "test3",
+			ToolPrefix: "test3_",
+			Tools: []ToolInfo{
+				{Name: "time", Description: "Get current time"},
+				{Name: "add", Description: "Add two numbers"},
+				{Name: "dozen", Description: "Return 12"},
+				{Name: "pi", Description: "Return 3.1415"},
+				{Name: "get_weather", Description: "Get current weather for a specific city"},
+				{Name: "slow", Description: "Wait N seconds"},
+				{Name: "get_headers", Description: "Get HTTP headers"},
+				{Name: "restaurants", Description: "List available restaurants in a city"},
+				{Name: "book_restaurant", Description: "Book or reserve a table at a restaurant in a city"},
+			},
+		},
+	}
+}
+
 // mockEmbeddingFunc returns a deterministic embedding based on text length.
 // Not semantically meaningful but lets us verify the hybrid path runs.
 func mockEmbeddingFunc() chromem.EmbeddingFunc {
